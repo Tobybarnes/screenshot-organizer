@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.toby.screenshot-organizer</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/tobybarnes/.local/bin/organize-screenshots.py</string>
+    </array>
+
+    <!-- Fires instantly when ~/Desktop changes (new screenshot lands) -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/tobybarnes/Desktop</string>
+    </array>
+
+    <!-- Reads ANTHROPIC_API_KEY from ~/.anthropic_api_key if not set here -->
+    <!-- Uncomment and fill in if you prefer to set it directly:           -->
+    <!--
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ANTHROPIC_API_KEY</key>
+        <string>sk-ant-...</string>
+    </dict>
+    -->
+
+    <key>StandardOutPath</key>
+    <string>/Users/tobybarnes/Library/Logs/screenshot-organizer.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/tobybarnes/Library/Logs/screenshot-organizer.log</string>
+
+    <!-- Don't run on login, only on Desktop changes -->
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
