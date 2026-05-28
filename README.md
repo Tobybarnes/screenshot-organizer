@@ -1,82 +1,150 @@
 # Screenshot Organizer
 
-Auto-organizes Desktop screenshots using Claude vision. Every new screenshot gets categorized and renamed into a folder structure that's actually searchable — no more hunting through `Screenshot 2026-03-13 at 9.54.13 AM.png`.
+Mac-native screenshot filing with Claude-generated filenames.
 
-Runs as a launchd agent on macOS, so it fires automatically whenever a screenshot lands on your Desktop.
+The workflow uses a Folder Action attached to `~/Documents/Screenshots/_Inbox`.
+New screenshots land in the inbox, Claude reads the image, and the script moves it
+to a monthly folder with a readable filename.
 
-## What it does
+Example:
 
-1. Watches `~/Desktop` for new screenshots (anything matching `Screenshot *.png`)
-2. Sends each image to Claude, which reads it and returns a category and a descriptive kebab-case filename
-3. Moves the file to `~/Documents/Screenshots/{category}/descriptive-name.png`
+```text
+~/Documents/Screenshots/_Inbox/Screenshot 2026-05-28 at 11.24.51 AM.png
+~/Documents/Screenshots/2026-05/2026-05-28-shopify-admin-campaign-budget.png
+```
 
-So `Screenshot 2026-03-06 at 5.49.35 PM.png` becomes `Documents/shopify-admin-nav-ia-future-state-comparison.png`, and Spotlight can actually find it.
+## What It Does
 
-## Categories
+1. Creates `~/Documents/Screenshots/_Inbox`.
+2. Sets macOS screenshots to save into that inbox.
+3. Installs a Folder Action script for the inbox.
+4. Uses Claude CLI vision to generate a short human-readable title.
+5. Moves screenshots into `~/Documents/Screenshots/YYYY-MM/`.
+6. Moves failures into `~/Documents/Screenshots/_Needs Review/`.
 
-- **Charts & Data** — graphs, survey results, data visualizations
-- **Code** — terminals, editors, debug output
-- **Documents** — slides, docs, strategy decks
-- **Experiential** — prototypes, explorations, UI experiments
-- **Social Media** — Slack, Twitter, LinkedIn, Pinterest
-- **Websites** — product UIs, tools, anything browser-based
-- **Other** — everything else
+This does not use cron, launchd, the Anthropic Python SDK, or an Anthropic API key.
 
 ## Requirements
 
 - macOS
-- Python 3 (ships with macOS)
-- [Claude Code CLI](https://claude.ai/code) installed and authenticated (`claude` in your PATH)
+- Python 3
+- Claude Code CLI installed and authenticated
 
-No Anthropic API key needed. The script uses `claude -p` with your existing Claude Code credentials.
+Check Claude first:
 
-## Installation
+```bash
+claude --version
+```
 
-**1. Clone the repo**
+If that opens a login or setup flow, finish it before installing.
+
+## Install
 
 ```bash
 git clone https://github.com/Tobybarnes/screenshot-organizer.git
 cd screenshot-organizer
+./install.sh
 ```
 
-**2. Copy the script**
+The installer:
 
-```bash
-cp organize-screenshots.py ~/.local/bin/organize-screenshots.py
-chmod +x ~/.local/bin/organize-screenshots.py
+- copies `organize_screenshots.py` to `~/.local/share/screenshot-organizer/`
+- compiles a Folder Action script into `~/Library/Scripts/Folder Action Scripts/`
+- attaches that script to `~/Documents/Screenshots/_Inbox`
+- sets the macOS screenshot save location to the inbox
+- unloads the old `com.toby.screenshot-organizer` LaunchAgent if it exists
+
+If macOS blocks the scripted Folder Action attachment, open **Folder Actions
+Setup** and attach:
+
+```text
+~/Library/Scripts/Folder Action Scripts/Screenshot Organizer.scpt
 ```
 
-**3. Edit paths in the script**
+to:
 
-Open `~/.local/bin/organize-screenshots.py` and update `SCREENSHOTS_DIR` if you want screenshots stored somewhere other than `~/Documents/Screenshots`.
-
-**4. Install the launchd agent**
-
-Open `com.toby.screenshot-organizer.plist` and replace the two occurrences of `/Users/tobybarnes` with your actual home directory path, then:
-
-```bash
-cp com.toby.screenshot-organizer.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.toby.screenshot-organizer.plist
+```text
+~/Documents/Screenshots/_Inbox
 ```
 
-**5. Test it**
+## Test
 
-Run the script manually to process any screenshots already on your Desktop:
+Copy an existing screenshot into the inbox:
 
 ```bash
-python3 ~/.local/bin/organize-screenshots.py
+cp ~/Desktop/Screenshot*.png ~/Documents/Screenshots/_Inbox/
 ```
 
-## Logs
+Or take a new screenshot with the normal macOS shortcut. A processed file should
+appear in:
+
+```text
+~/Documents/Screenshots/YYYY-MM/
+```
+
+Logs are written to:
+
+```text
+~/Documents/Screenshots/.automation/screenshot-automation.log
+```
+
+## Backfill Existing Desktop Screenshots
+
+After install, process old Desktop screenshots through the same worker:
 
 ```bash
-tail -f ~/Library/Logs/screenshot-organizer.log
+python3 ~/.local/share/screenshot-organizer/organize_screenshots.py ~/Desktop/Screenshot*.png
 ```
 
 ## Uninstall
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.toby.screenshot-organizer.plist
-rm ~/Library/LaunchAgents/com.toby.screenshot-organizer.plist
-rm ~/.local/bin/organize-screenshots.py
+./uninstall.sh
 ```
+
+The uninstaller removes the Folder Action and installed worker. It does not
+delete organised screenshots and does not change your current screenshot save
+location.
+
+## Troubleshooting
+
+### Claude Fails
+
+Run:
+
+```bash
+claude --version
+claude
+```
+
+The script uses local Claude CLI auth. It does not require `ANTHROPIC_API_KEY`.
+
+### Shopify Proxy Variables
+
+The worker deliberately removes these variables from the Claude subprocess:
+
+```text
+OPENAI_BASE_URL
+OPENAI_API_BASE
+OPENAI_API_KEY
+```
+
+On a non-Shopify Mac, authenticate Claude normally with `claude`. Do not set
+Shopify proxy values for this tool.
+
+### Files Go To `_Needs Review`
+
+That means the original screenshot was preserved but Claude title generation or
+file processing failed. Check:
+
+```text
+~/Documents/Screenshots/.automation/screenshot-automation.log
+```
+
+### Folder Action Does Not Run
+
+Open **Folder Actions Setup** and confirm:
+
+- Folder Actions are enabled
+- `~/Documents/Screenshots/_Inbox` is listed
+- `Screenshot Organizer.scpt` is attached and enabled
