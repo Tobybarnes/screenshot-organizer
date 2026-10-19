@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
+import urllib.error
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -183,23 +185,58 @@ def parse_claude_stream_result(stdout: str) -> str:
     return title
 
 
-def claude_command(claude_bin: str) -> list[str]:
-    return [
-        claude_bin,
-        "-p",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--json-schema",
-        TITLE_SCHEMA,
-        "--model",
-        "sonnet",
-    ]
-
-
 def generate_title(path: Path, claude_bin: str) -> str:
+    api_key = load_api_key() or os.environ.get("ANTHROPIC_API_KEY", "")
+    if api_key:
+        return _generate_title_api(path, api_key)
+    return _generate_title_cli(path, claude_bin)
+
+
+def _generate_title_api(path: Path, api_key: str) -> str:
+    """Call the Anthropic Messages API directly — works without the desktop app OAuth."""
+    payload = json.dumps({
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 256,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": to_base64(path),
+                    },
+                },
+                {"type": "text", "text": PROMPT},
+            ],
+        }],
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        body = json.loads(resp.read())
+
+    text = body["content"][0]["text"].strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    title = json.loads(text).get("filename", "").strip()
+    if not title:
+        raise RuntimeError("API returned an empty filename")
+    return title
+
+
+def _generate_title_cli(path: Path, claude_bin: str) -> str:
+    """Fallback: use the Claude CLI (requires valid OAuth session)."""
     message = {
         "type": "user",
         "message": {
@@ -218,18 +255,24 @@ def generate_title(path: Path, claude_bin: str) -> str:
         },
     }
 
+    cli_cmd = [
+        claude_bin, "-p",
+        "--input-format", "stream-json",
+        "--output-format", "stream-json",
+        "--verbose",
+        "--json-schema", TITLE_SCHEMA,
+        "--model", "sonnet",
+    ]
     result = subprocess.run(
-        claude_command(claude_bin),
+        cli_cmd,
         input=json.dumps(message),
         capture_output=True,
         text=True,
         timeout=90,
         env=clean_claude_environment(),
     )
-
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "Claude CLI failed")
-
     return parse_claude_stream_result(result.stdout)
 
 
