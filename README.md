@@ -22,13 +22,18 @@ Example:
 5. Moves screenshots into `~/Documents/Screenshots/YYYY-MM/`.
 6. Moves failures into `~/Documents/Screenshots/_Needs Review/`.
 
-This does not use cron, launchd, the Anthropic Python SDK, or an Anthropic API key.
+This does not use cron, launchd, or the Anthropic Python SDK.
 
 ## Requirements
 
 - macOS
 - Python 3
 - Claude Code CLI installed and authenticated
+- Anthropic API key (from [console.anthropic.com](https://console.anthropic.com/settings/keys))
+
+The API key is needed because the Folder Action runs as a background subprocess without
+access to the desktop app's OAuth session. The installer will prompt for it and save it
+to `~/.config/screenshot-organizer/anthropic_api_key` (chmod 600).
 
 Check Claude first:
 

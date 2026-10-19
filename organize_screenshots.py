@@ -21,6 +21,7 @@ DEFAULT_ROOT = Path.home() / "Documents" / "Screenshots"
 DEFAULT_INBOX = DEFAULT_ROOT / "_Inbox"
 DEFAULT_REVIEW = DEFAULT_ROOT / "_Needs Review"
 DEFAULT_LOG = DEFAULT_ROOT / ".automation" / "screenshot-automation.log"
+API_KEY_FILE = Path.home() / ".config" / "screenshot-organizer" / "anthropic_api_key"
 SHOPIFY_PROXY_ENV = {
     "OPENAI_BASE_URL",
     "OPENAI_API_BASE",
@@ -113,10 +114,25 @@ def unique_path(path: Path) -> Path:
         counter += 1
 
 
+def load_api_key() -> str | None:
+    """Read ANTHROPIC_API_KEY from the config file, if present."""
+    if API_KEY_FILE.exists():
+        key = API_KEY_FILE.read_text().strip()
+        if key:
+            return key
+    return None
+
+
 def clean_claude_environment(source: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(os.environ if source is None else source)
     for key in SHOPIFY_PROXY_ENV:
         env.pop(key, None)
+    # Ensure HOME is set so the CLI can find its config even in Folder Action context
+    env.setdefault("HOME", str(Path.home()))
+    # Prefer an explicit API key from the config file over whatever is in the environment
+    api_key = load_api_key()
+    if api_key:
+        env["ANTHROPIC_API_KEY"] = api_key
     return env
 
 

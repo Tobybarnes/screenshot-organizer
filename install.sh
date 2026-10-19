@@ -22,7 +22,28 @@ if ! "$CLAUDE_BIN" --version >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$INBOX" "$REVIEW" "$INSTALL_DIR" "$FOLDER_ACTION_DIR"
+API_KEY_DIR="$HOME/.config/screenshot-organizer"
+API_KEY_FILE="$API_KEY_DIR/anthropic_api_key"
+
+mkdir -p "$INBOX" "$REVIEW" "$INSTALL_DIR" "$FOLDER_ACTION_DIR" "$API_KEY_DIR"
+
+# Store API key for use by the Folder Action subprocess (which runs without OAuth)
+if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ ! -f "$API_KEY_FILE" ]; then
+  echo ""
+  echo "An Anthropic API key is required for the Folder Action to authenticate."
+  echo "Get one at: https://console.anthropic.com/settings/keys"
+  echo ""
+  read -r -p "Paste your Anthropic API key (or press Enter to skip): " input_key
+  if [ -n "$input_key" ]; then
+    echo "$input_key" > "$API_KEY_FILE"
+    chmod 600 "$API_KEY_FILE"
+    echo "API key saved to $API_KEY_FILE"
+  fi
+elif [ -n "${ANTHROPIC_API_KEY:-}" ] && [ ! -f "$API_KEY_FILE" ]; then
+  echo "$ANTHROPIC_API_KEY" > "$API_KEY_FILE"
+  chmod 600 "$API_KEY_FILE"
+fi
+
 cp "$(dirname "$0")/organize_screenshots.py" "$INSTALL_DIR/organize_screenshots.py"
 chmod +x "$INSTALL_DIR/organize_screenshots.py"
 
