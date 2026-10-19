@@ -15,39 +15,40 @@ STRIP_ENV="${SCREENSHOT_ORGANIZER_STRIP_ENV:-}"
 
 # --- Find tools -------------------------------------------------------------
 
-if ! CLAUDE_BIN="$(command -v claude 2>/dev/null)"; then
-  echo "Claude CLI was not found in PATH."
-  echo "Install and authenticate Claude Code, then rerun: claude"
-  exit 1
-fi
-
-if ! "$CLAUDE_BIN" --version >/dev/null 2>&1; then
-  echo "Claude CLI exists at $CLAUDE_BIN but did not run cleanly."
-  echo "Open Claude once or run: claude"
-  exit 1
-fi
-
 if ! PYTHON_BIN="$(command -v python3 2>/dev/null)"; then
   echo "python3 was not found. Install Xcode Command Line Tools: xcode-select --install"
   exit 1
 fi
 
+# The Claude CLI is optional (an API key works on its own). Look on PATH and
+# in the usual install locations, since the native installer's ~/.local/bin
+# is often not on PATH.
+CLAUDE_BIN=""
+for candidate in "$(command -v claude 2>/dev/null || true)" \
+    "$HOME/.local/bin/claude" "$HOME/.claude/local/claude" \
+    /opt/homebrew/bin/claude /usr/local/bin/claude; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
+    CLAUDE_BIN="$candidate"
+    break
+  fi
+done
+
 # Folder Actions run with a bare PATH (/usr/bin:/bin:/usr/sbin:/sbin).
 # Build a PATH that includes everything Claude needs, including node if the
 # CLI was installed via npm (its shebang is `#!/usr/bin/env node`).
-RUN_PATH="$(dirname "$CLAUDE_BIN")"
-CLAUDE_REAL="$("$PYTHON_BIN" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$CLAUDE_BIN")"
-if head -c 64 "$CLAUDE_REAL" 2>/dev/null | grep -q "node"; then
-  if NODE_BIN="$(command -v node 2>/dev/null)"; then
-    RUN_PATH="$RUN_PATH:$(dirname "$NODE_BIN")"
-  else
-    echo "Claude CLI is a node script but node was not found in PATH."
-    exit 1
+RUN_PATH=""
+if [ -n "$CLAUDE_BIN" ]; then
+  RUN_PATH="$(dirname "$CLAUDE_BIN"):"
+  CLAUDE_REAL="$("$PYTHON_BIN" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$CLAUDE_BIN")"
+  if head -c 64 "$CLAUDE_REAL" 2>/dev/null | grep -q "node"; then
+    if NODE_BIN="$(command -v node 2>/dev/null)"; then
+      RUN_PATH="$RUN_PATH$(dirname "$NODE_BIN"):"
+    fi
   fi
 fi
-RUN_PATH="$RUN_PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+RUN_PATH="${RUN_PATH}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-# --- Optional Anthropic API key ----------------------------------------------
+# --- Anthropic API key (required if there is no Claude CLI) -----------------
 # With a key, screenshots are titled through the API directly (billed per call
 # to your API account). Without one, the worker uses your Claude CLI login.
 
@@ -62,14 +63,28 @@ elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   echo "Saved ANTHROPIC_API_KEY from your environment to $API_KEY_FILE"
 elif [ -t 0 ]; then
   echo ""
-  echo "Optional: paste an Anthropic API key (console.anthropic.com/settings/keys)"
-  echo "to title screenshots via the API. Press Enter to use your Claude CLI login instead."
+  if [ -n "$CLAUDE_BIN" ]; then
+    echo "Optional: paste an Anthropic API key (console.anthropic.com/settings/keys)"
+    echo "to title screenshots via the API. Press Enter to use your Claude CLI login instead."
+  else
+    echo "No Claude Code CLI found, so an Anthropic API key is needed."
+    echo "Create one at https://console.anthropic.com/settings/keys and paste it here."
+    echo "(Typing is hidden. Or press Enter to quit and install Claude Code instead.)"
+  fi
   read -r -s -p "API key: " input_key
   echo ""
   if [ -n "$input_key" ]; then
     ( umask 077; printf '%s\n' "$input_key" > "$API_KEY_FILE" )
     echo "API key saved to $API_KEY_FILE"
   fi
+fi
+
+if [ -z "$CLAUDE_BIN" ] && [ ! -f "$API_KEY_FILE" ]; then
+  echo ""
+  echo "Nothing to talk to Claude with. Either:"
+  echo "  - rerun ./install.sh and paste an Anthropic API key, or"
+  echo "  - install Claude Code (https://docs.claude.com/en/docs/claude-code), run 'claude' once to log in, then rerun ./install.sh"
+  exit 1
 fi
 
 # --- Install worker ---------------------------------------------------------
@@ -96,7 +111,7 @@ export SCREENSHOT_ORGANIZER_MODEL=$(printf '%q' "$MODEL")
 export SCREENSHOT_ORGANIZER_STRIP_ENV=$(printf '%q' "$STRIP_ENV")
 exec $(printf '%q' "$PYTHON_BIN") $(printf '%q' "$INSTALL_DIR/organize_screenshots.py") \\
   --screenshots-root $(printf '%q' "$ROOT") \\
-  --claude-bin $(printf '%q' "$CLAUDE_BIN") \\
+  --claude-bin $(printf '%q' "${CLAUDE_BIN:-claude}") \\
   "\$@"
 RUNNER_SH
 chmod +x "$RUNNER"
@@ -156,7 +171,7 @@ echo "Screenshot Organizer installed."
 echo "Inbox:         $INBOX"
 echo "Destination:   $ROOT/YYYY-MM/"
 echo "Folder Action: $SCRIPT_DEST"
-echo "Claude CLI:    $CLAUDE_BIN (model: $MODEL)"
+echo "Claude CLI:    ${CLAUDE_BIN:-not installed (using API key)} (model: $MODEL)"
 echo ""
 
 # --- Smoke test under the same bare environment a Folder Action gets --------
