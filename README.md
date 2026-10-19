@@ -10,30 +10,31 @@ Example:
 
 ```text
 ~/Documents/Screenshots/_Inbox/Screenshot 2026-05-28 at 11.24.51 AM.png
-~/Documents/Screenshots/2026-05/2026-05-28-shopify-admin-campaign-budget.png
+~/Documents/Screenshots/2026-05/2026-05-28-campaign-budget-dashboard.png
 ```
 
 ## What It Does
 
 1. Creates `~/Documents/Screenshots/_Inbox`.
-2. Sets macOS screenshots to save into that inbox.
+2. Sets macOS screenshots to save into that inbox (and remembers your old location).
 3. Installs a Folder Action script for the inbox.
-4. Uses Claude CLI vision to generate a short human-readable title.
+4. Downscales a temporary copy of each screenshot and asks Claude CLI for a short title.
 5. Moves screenshots into `~/Documents/Screenshots/YYYY-MM/`.
 6. Moves failures into `~/Documents/Screenshots/_Needs Review/`.
 
-This does not use cron, launchd, or the Anthropic Python SDK.
+No cron, launchd or Python packages; it uses only the standard library.
 
 ## Requirements
 
 - macOS
-- Python 3
-- Claude Code CLI installed and authenticated
-- Anthropic API key (from [console.anthropic.com](https://console.anthropic.com/settings/keys))
+- Python 3 (`xcode-select --install` if missing)
+- One way to reach Claude:
+  - **Claude Code CLI**, installed and logged in (uses your Claude plan), or
+  - **an Anthropic API key** from [console.anthropic.com](https://console.anthropic.com/settings/keys) (billed per call to your API account). Use this if your CLI login doesn't work from Folder Actions.
 
-The API key is needed because the Folder Action runs as a background subprocess without
-access to the desktop app's OAuth session. The installer will prompt for it and save it
-to `~/.config/screenshot-organizer/anthropic_api_key` (chmod 600).
+If an API key is saved, it is used; otherwise the CLI is used. The installer offers
+to save a key to `~/.config/screenshot-organizer/anthropic_api_key` (mode 600), or
+picks up `ANTHROPIC_API_KEY` from your environment.
 
 Check Claude first:
 
@@ -54,51 +55,47 @@ cd screenshot-organizer
 The installer:
 
 - copies `organize_screenshots.py` to `~/.local/share/screenshot-organizer/`
+- writes `run.sh` there with the `PATH` your Claude CLI needs (Folder Actions run with a bare `PATH`, which breaks npm-installed Claude)
 - compiles a Folder Action script into `~/Library/Scripts/Folder Action Scripts/`
 - attaches that script to `~/Documents/Screenshots/_Inbox`
 - sets the macOS screenshot save location to the inbox
-- unloads the old `com.toby.screenshot-organizer` LaunchAgent if it exists
+- runs a self-check that sends a tiny test image to Claude under the same bare environment a Folder Action gets
 
 If macOS blocks the scripted Folder Action attachment, open **Folder Actions
-Setup** and attach:
+Setup** and attach `~/Library/Scripts/Folder Action Scripts/Screenshot Organizer.scpt`
+to `~/Documents/Screenshots/_Inbox`.
 
-```text
-~/Library/Scripts/Folder Action Scripts/Screenshot Organizer.scpt
-```
+### Options
 
-to:
+Set these before running `./install.sh`:
 
-```text
-~/Documents/Screenshots/_Inbox
-```
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SCREENSHOT_ORGANIZER_ROOT` | `~/Documents/Screenshots` | Where everything lives |
+| `SCREENSHOT_ORGANIZER_MODEL` | `haiku` | `haiku`, `sonnet`, `opus`, or a full model ID |
+| `SCREENSHOT_ORGANIZER_STRIP_ENV` | _(empty)_ | Comma-separated env vars to hide from the Claude subprocess, e.g. if a proxy variable in your shell interferes with Claude |
 
 ## Test
 
-Copy an existing screenshot into the inbox:
-
 ```bash
-cp ~/Desktop/Screenshot*.png ~/Documents/Screenshots/_Inbox/
+~/.local/share/screenshot-organizer/run.sh --check
 ```
 
-Or take a new screenshot with the normal macOS shortcut. A processed file should
-appear in:
+Then take a screenshot with the normal shortcut. A processed file should appear in
+`~/Documents/Screenshots/YYYY-MM/`.
 
-```text
-~/Documents/Screenshots/YYYY-MM/
-```
-
-Logs are written to:
-
-```text
-~/Documents/Screenshots/.automation/screenshot-automation.log
-```
+Logs: `~/Documents/Screenshots/.automation/screenshot-automation.log`
 
 ## Backfill Existing Desktop Screenshots
 
-After install, process old Desktop screenshots through the same worker:
+```bash
+~/.local/share/screenshot-organizer/run.sh ~/Desktop/Screenshot*.png
+```
+
+## Retry Failures
 
 ```bash
-python3 ~/.local/share/screenshot-organizer/organize_screenshots.py ~/Desktop/Screenshot*.png
+~/.local/share/screenshot-organizer/run.sh --retry-review
 ```
 
 ## Uninstall
@@ -107,49 +104,42 @@ python3 ~/.local/share/screenshot-organizer/organize_screenshots.py ~/Desktop/Sc
 ./uninstall.sh
 ```
 
-The uninstaller removes the Folder Action and installed worker. It does not
-delete organised screenshots and does not change your current screenshot save
-location.
+Removes the Folder Action and installed worker, and restores your previous
+screenshot save location. Organised screenshots are left alone.
 
 ## Troubleshooting
 
-### Claude Fails
+### `--check` fails
 
-Run:
+The output says which route it tried.
 
-```bash
-claude --version
-claude
-```
+- **Claude CLI:** run `claude` once in Terminal to make sure it is logged in. If it
+  works in Terminal but not here, save an API key instead:
+  `mkdir -p ~/.config/screenshot-organizer && (umask 077; pbpaste > ~/.config/screenshot-organizer/anthropic_api_key)`
+- **API key:** a `401` means the key is wrong or revoked; replace the file above.
 
-The script uses local Claude CLI auth. It does not require `ANTHROPIC_API_KEY`.
+Uninstalling leaves the key file in place; delete it yourself if you no longer need it.
 
-### Shopify Proxy Variables
+### Files go to `_Needs Review`
 
-The worker deliberately removes these variables from the Claude subprocess:
+The original screenshot is preserved, but titling or moving failed. The reason is
+in the log. Fix the cause, then run `run.sh --retry-review`.
 
-```text
-OPENAI_BASE_URL
-OPENAI_API_BASE
-OPENAI_API_KEY
-```
-
-On a non-Shopify Mac, authenticate Claude normally with `claude`. Do not set
-Shopify proxy values for this tool.
-
-### Files Go To `_Needs Review`
-
-That means the original screenshot was preserved but Claude title generation or
-file processing failed. Check:
-
-```text
-~/Documents/Screenshots/.automation/screenshot-automation.log
-```
-
-### Folder Action Does Not Run
+### Folder Action does not run
 
 Open **Folder Actions Setup** and confirm:
 
 - Folder Actions are enabled
 - `~/Documents/Screenshots/_Inbox` is listed
 - `Screenshot Organizer.scpt` is attached and enabled
+
+If it is attached but nothing happens, macOS may be blocking access to
+`~/Documents`. Check **System Settings → Privacy & Security → Files and Folders**
+(and Full Disk Access) for *Folder Actions Dispatcher* / *System Events*, or set
+`SCREENSHOT_ORGANIZER_ROOT` to a folder outside `~/Documents` and reinstall.
+
+## Development
+
+```bash
+python3 -m unittest discover -s tests
+```

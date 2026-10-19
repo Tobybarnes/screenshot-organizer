@@ -9,6 +9,11 @@ SCRIPT_NAME="Screenshot Organizer.scpt"
 FOLDER_ACTION_DIR="$HOME/Library/Scripts/Folder Action Scripts"
 SCRIPT_DEST="$FOLDER_ACTION_DIR/$SCRIPT_NAME"
 LEGACY_PLIST="$HOME/Library/LaunchAgents/com.toby.screenshot-organizer.plist"
+PREVIOUS_LOCATION_FILE="$INSTALL_DIR/previous-screenshot-location"
+MODEL="${SCREENSHOT_ORGANIZER_MODEL:-haiku}"
+STRIP_ENV="${SCREENSHOT_ORGANIZER_STRIP_ENV:-}"
+
+# --- Find tools -------------------------------------------------------------
 
 if ! CLAUDE_BIN="$(command -v claude 2>/dev/null)"; then
   echo "Claude CLI was not found in PATH."
@@ -22,42 +27,89 @@ if ! "$CLAUDE_BIN" --version >/dev/null 2>&1; then
   exit 1
 fi
 
-API_KEY_DIR="$HOME/.config/screenshot-organizer"
-API_KEY_FILE="$API_KEY_DIR/anthropic_api_key"
-
-mkdir -p "$INBOX" "$REVIEW" "$INSTALL_DIR" "$FOLDER_ACTION_DIR" "$API_KEY_DIR"
-
-# Store API key for use by the Folder Action subprocess (which runs without OAuth)
-if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ ! -f "$API_KEY_FILE" ]; then
-  echo ""
-  echo "An Anthropic API key is required for the Folder Action to authenticate."
-  echo "Get one at: https://console.anthropic.com/settings/keys"
-  echo ""
-  read -r -p "Paste your Anthropic API key (or press Enter to skip): " input_key
-  if [ -n "$input_key" ]; then
-    echo "$input_key" > "$API_KEY_FILE"
-    chmod 600 "$API_KEY_FILE"
-    echo "API key saved to $API_KEY_FILE"
-  fi
-elif [ -n "${ANTHROPIC_API_KEY:-}" ] && [ ! -f "$API_KEY_FILE" ]; then
-  echo "$ANTHROPIC_API_KEY" > "$API_KEY_FILE"
-  chmod 600 "$API_KEY_FILE"
+if ! PYTHON_BIN="$(command -v python3 2>/dev/null)"; then
+  echo "python3 was not found. Install Xcode Command Line Tools: xcode-select --install"
+  exit 1
 fi
 
+# Folder Actions run with a bare PATH (/usr/bin:/bin:/usr/sbin:/sbin).
+# Build a PATH that includes everything Claude needs, including node if the
+# CLI was installed via npm (its shebang is `#!/usr/bin/env node`).
+RUN_PATH="$(dirname "$CLAUDE_BIN")"
+CLAUDE_REAL="$("$PYTHON_BIN" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$CLAUDE_BIN")"
+if head -c 64 "$CLAUDE_REAL" 2>/dev/null | grep -q "node"; then
+  if NODE_BIN="$(command -v node 2>/dev/null)"; then
+    RUN_PATH="$RUN_PATH:$(dirname "$NODE_BIN")"
+  else
+    echo "Claude CLI is a node script but node was not found in PATH."
+    exit 1
+  fi
+fi
+RUN_PATH="$RUN_PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# --- Optional Anthropic API key ----------------------------------------------
+# With a key, screenshots are titled through the API directly (billed per call
+# to your API account). Without one, the worker uses your Claude CLI login.
+
+API_KEY_DIR="$HOME/.config/screenshot-organizer"
+API_KEY_FILE="$API_KEY_DIR/anthropic_api_key"
+mkdir -p "$API_KEY_DIR"
+
+if [ -f "$API_KEY_FILE" ]; then
+  echo "Using saved API key: $API_KEY_FILE"
+elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  ( umask 077; printf '%s\n' "$ANTHROPIC_API_KEY" > "$API_KEY_FILE" )
+  echo "Saved ANTHROPIC_API_KEY from your environment to $API_KEY_FILE"
+elif [ -t 0 ]; then
+  echo ""
+  echo "Optional: paste an Anthropic API key (console.anthropic.com/settings/keys)"
+  echo "to title screenshots via the API. Press Enter to use your Claude CLI login instead."
+  read -r -s -p "API key: " input_key
+  echo ""
+  if [ -n "$input_key" ]; then
+    ( umask 077; printf '%s\n' "$input_key" > "$API_KEY_FILE" )
+    echo "API key saved to $API_KEY_FILE"
+  fi
+fi
+
+# --- Install worker ---------------------------------------------------------
+
+mkdir -p "$INBOX" "$REVIEW" "$INSTALL_DIR" "$FOLDER_ACTION_DIR"
 cp "$(dirname "$0")/organize_screenshots.py" "$INSTALL_DIR/organize_screenshots.py"
 chmod +x "$INSTALL_DIR/organize_screenshots.py"
 
+# Remember the current screenshot location so uninstall can restore it.
+if [ ! -f "$PREVIOUS_LOCATION_FILE" ]; then
+  CURRENT_LOCATION="$(defaults read com.apple.screencapture location 2>/dev/null || echo "$HOME/Desktop")"
+  if [ "$CURRENT_LOCATION" != "$INBOX" ]; then
+    printf '%s\n' "$CURRENT_LOCATION" > "$PREVIOUS_LOCATION_FILE"
+  fi
+fi
+
+# Small wrapper so the Folder Action has one thing to call, with the right
+# environment, running in the background so it never blocks Finder.
+RUNNER="$INSTALL_DIR/run.sh"
+cat > "$RUNNER" <<RUNNER_SH
+#!/bin/bash
+export PATH=$(printf '%q' "$RUN_PATH")
+export SCREENSHOT_ORGANIZER_MODEL=$(printf '%q' "$MODEL")
+export SCREENSHOT_ORGANIZER_STRIP_ENV=$(printf '%q' "$STRIP_ENV")
+exec $(printf '%q' "$PYTHON_BIN") $(printf '%q' "$INSTALL_DIR/organize_screenshots.py") \\
+  --screenshots-root $(printf '%q' "$ROOT") \\
+  --claude-bin $(printf '%q' "$CLAUDE_BIN") \\
+  "\$@"
+RUNNER_SH
+chmod +x "$RUNNER"
+
 APPLESCRIPT_SRC="$INSTALL_DIR/screenshot-organizer-folder-action.applescript"
 cat > "$APPLESCRIPT_SRC" <<APPLESCRIPT
-property workerPath : "$INSTALL_DIR/organize_screenshots.py"
-property screenshotsRoot : "$ROOT"
-property claudeBin : "$CLAUDE_BIN"
+property runnerPath : "$RUNNER"
 
 on adding folder items to this_folder after receiving added_items
-	repeat with added_item in added_items
-		set itemPath to POSIX path of added_item
-		do shell script "/usr/bin/python3 " & quoted form of workerPath & " --screenshots-root " & quoted form of screenshotsRoot & " --claude-bin " & quoted form of claudeBin & " " & quoted form of itemPath
-	end repeat
+  repeat with added_item in added_items
+    set itemPath to POSIX path of added_item
+    do shell script quoted form of runnerPath & " " & quoted form of itemPath & " > /dev/null 2>&1 &"
+  end repeat
 end adding folder items to
 APPLESCRIPT
 
@@ -65,27 +117,30 @@ osacompile -o "$SCRIPT_DEST" "$APPLESCRIPT_SRC"
 
 osascript <<APPLESCRIPT
 tell application "System Events"
-	set folder actions enabled to true
-	set inboxPath to "$INBOX"
-	set actionName to "$SCRIPT_NAME"
-	set targetAction to missing value
-	repeat with candidate in folder actions
-		if (path of candidate) is inboxPath then
-			set targetAction to candidate
-			exit repeat
-		end if
-	end repeat
-	if targetAction is missing value then
-		set targetAction to make new folder action at end of folder actions with properties {path:inboxPath, enabled:true}
-	else
-		set enabled of targetAction to true
-	end if
-	tell targetAction
-		if not (exists script actionName) then
-			make new script at end of scripts with properties {name:actionName}
-		end if
-		set enabled of script actionName to true
-	end tell
+  set folder actions enabled to true
+  set inboxPath to "$INBOX"
+  set actionName to "$SCRIPT_NAME"
+  set targetAction to missing value
+
+  repeat with candidate in folder actions
+    if (path of candidate) is inboxPath then
+      set targetAction to candidate
+      exit repeat
+    end if
+  end repeat
+
+  if targetAction is missing value then
+    set targetAction to make new folder action at end of folder actions with properties {path:inboxPath, enabled:true}
+  else
+    set enabled of targetAction to true
+  end if
+
+  tell targetAction
+    if not (exists script actionName) then
+      make new script at end of scripts with properties {name:actionName}
+    end if
+    set enabled of script actionName to true
+  end tell
 end tell
 APPLESCRIPT
 
@@ -98,10 +153,29 @@ defaults write com.apple.screencapture location "$INBOX"
 killall SystemUIServer >/dev/null 2>&1 || true
 
 echo "Screenshot Organizer installed."
-echo "Inbox: $INBOX"
-echo "Destination: $ROOT/YYYY-MM/"
+echo "Inbox:         $INBOX"
+echo "Destination:   $ROOT/YYYY-MM/"
 echo "Folder Action: $SCRIPT_DEST"
-echo "Claude CLI: $CLAUDE_BIN"
+echo "Claude CLI:    $CLAUDE_BIN (model: $MODEL)"
+echo ""
+
+# --- Smoke test under the same bare environment a Folder Action gets --------
+
+echo "Checking Claude works from a Folder Action environment..."
+if env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" TMPDIR="${TMPDIR:-/tmp}" \
+    "$RUNNER" --check; then
+  echo ""
+  echo "All set. Take a screenshot (Cmd+Shift+4) and it should land in $ROOT/$(date +%Y-%m)/"
+else
+  echo ""
+  echo "WARNING: the check failed, so screenshots will go to _Needs Review."
+  if [ ! -f "$API_KEY_FILE" ]; then
+    echo "If your Claude CLI login doesn't work from Folder Actions, save an API key:"
+    echo "  mkdir -p $API_KEY_DIR && (umask 077; pbpaste > $API_KEY_FILE)"
+  fi
+  echo "Then re-run: $RUNNER --check"
+fi
+
 echo ""
 echo "If Folder Actions did not attach, open Folder Actions Setup and attach:"
 echo "  $SCRIPT_DEST"
