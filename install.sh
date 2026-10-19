@@ -15,8 +15,13 @@ STRIP_ENV="${SCREENSHOT_ORGANIZER_STRIP_ENV:-}"
 
 # --- Find tools -------------------------------------------------------------
 
-if ! PYTHON_BIN="$(command -v python3 2>/dev/null)"; then
-  echo "python3 was not found. Install Xcode Command Line Tools: xcode-select --install"
+# On a fresh Mac, /usr/bin/python3 is a stub that only offers to install the
+# Command Line Tools, so check that it actually runs.
+if ! PYTHON_BIN="$(command -v python3 2>/dev/null)" || ! "$PYTHON_BIN" -c 'pass' >/dev/null 2>&1; then
+  echo "Python 3 isn't installed yet."
+  echo "Install Apple's Command Line Tools (a dialog should open; click Install):"
+  echo "  xcode-select --install"
+  echo "When it finishes, run this installer again."
   exit 1
 fi
 
