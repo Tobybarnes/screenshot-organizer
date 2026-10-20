@@ -28,8 +28,9 @@ if [ -f "$PREVIOUS_LOCATION_FILE" ]; then
 fi
 if [ "$(defaults read com.apple.screencapture location 2>/dev/null || true)" = "$INBOX" ]; then
   mkdir -p "$RESTORE_TO"
-  defaults write com.apple.screencapture location "$RESTORE_TO"
+  defaults write com.apple.screencapture location -string "$RESTORE_TO"
   killall SystemUIServer >/dev/null 2>&1 || true
+  killall screencaptureui >/dev/null 2>&1 || true
   echo "Screenshot save location restored to: $RESTORE_TO"
 fi
 

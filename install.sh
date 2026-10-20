@@ -169,8 +169,9 @@ if [ -f "$LEGACY_PLIST" ]; then
   launchctl unload "$LEGACY_PLIST" >/dev/null 2>&1 || true
 fi
 
-defaults write com.apple.screencapture location "$INBOX"
+defaults write com.apple.screencapture location -string "$INBOX"
 killall SystemUIServer >/dev/null 2>&1 || true
+killall screencaptureui >/dev/null 2>&1 || true
 
 echo "Screenshot Organizer installed."
 echo "Inbox:         $INBOX"
